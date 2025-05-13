@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fly</title>
+  <style>
+
+    @font-face {
+      font-family: 'SuperShinyFont';
+      src: url('fonts/SuperShinyFont.ttf') format('truetype');
+    }
+
+    @font-face {
+      font-family: 'Dirtyboy';
+      src: url('fonts/Dirtyboy.ttf') format('truetype');
+    }
+
+    @font-face {
+      font-family: 'Moogalator';
+      src: url('fonts/Moogalator.ttf') format('truetype');
+    }
+
+    @font-face {
+      font-family: 'HomeVideo';
+      src: url('fonts/HomeVideo.ttf');
+    }
+
+    @font-face {
+      font-family: 'HomeVideoBold';
+      src: url('fonts/HomeVideoBold.ttf');
+    }
+
+    @font-face {
+      font-family: 'Rugged';
+      src: url('fonts/Rugged.ttf');
+    }
+
+    canvas {
+      display: block;
+      margin: 0 auto;
+      background: #e8e7b2;
+      border: 2px solid #000;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="300" height="533"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game constants
+const gravity = 0.4;
+const lift = -1.0;
+const pipeWidth = 225;
+
+const music = new Audio("music/FightForFuture.mp3")
+music.loop = true;
+music.volume = 0.25;
+
+const flySound = new Audio("sounds/buzz.mov")
+flySound.loop = true;
+flySound.volume = 0; // initial volume
+flySound.play();
+
+
+// Bird object
+const bird = {
+  baseX: 60,
+  x: 60,
+  y: 300,
+  width: 20,
+  height: 15,
+  velocity: 0,
+  tilt: 0
+};
+
+// Pipes
+let pipes = [];
+let pipeTimer = 0;
+let pipeInterval = 5;
+
+// Enemies
+let enemies = [];
+let enemyTimer = 0;
+let enemyInterval = 210;
+
+// Score and game state
+let score = 0;
+let gameOver = false;
+let showTitle = true;
+
+// Stats and leaderboard from localStorage
+let stats = JSON.parse(localStorage.getItem('flyStats')) || { games: 0, totalScore: 0 };
+let leaderboard = JSON.parse(localStorage.getItem('leaderboard')) || [];
+
+// Input handling
+let isFlying = false;
+function startFlying() {
+  if (gameOver) resetGame();
+  if (showTitle) showTitle = false;
+  isFlying = true;
+  flySound.volume = 0.1; // increase volume
+}
+function stopFlying() {
+  isFlying = false;
+  flySound.volume = 0; // return to initial volume
+}
+
+canvas.addEventListener('mousedown', startFlying);
+canvas.addEventListener('mouseup', stopFlying);
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  startFlying();
+}, { passive: false });
+canvas.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  stopFlying();
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') startFlying();
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') stopFlying();
+});
+
+let blinkFrame = 0;
+let blinkVisible = true;
+let eyeBlinkFrame = 0;
+let eyeVisible = true;
+
+function spawnPipe() {
+  const baseGap = 325;
+  const gapReduction = Math.floor(score / 150) * 20; // shrink 20px every 100 points
+  const minGap = 175;
+  const maxExtra = 125;
+  const gap = Math.max(minGap, baseGap - gapReduction + Math.random() * maxExtra);
+
+  const topHeight = Math.random() * (canvas.height - gap - 100) + 50;
+  pipes.push({ x: canvas.width, top: topHeight, bottom: canvas.height - topHeight - gap, gap });
+}
+
+function spawnEnemy() {
+  const size = Math.random() * 6 + 6;
+  let angle = Math.random() * Math.PI * 2;
+
+  // Avoid purely vertical or horizontal movement by enforcing a minimum angle from vertical and horizontal axes
+  const minAngleFromAxis = Math.PI / 8; // 22.5 degrees
+  if (Math.abs(Math.cos(angle)) < Math.cos(minAngleFromAxis)) {
+    angle += minAngleFromAxis * (Math.random() < 0.5 ? 1 : -1);
+  }
+
+  const speed = 1 + Math.random() * 1;
+  enemies.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    vx: Math.cos(angle) * speed,
+    vy: Math.sin(angle) * speed,
+    size,
+    collisions: 0
+  });
+}
+
+function resetGame() {
+  if (score > 0) {
+    leaderboard.push(score);
+    leaderboard.sort((a, b) => b - a);
+    leaderboard = leaderboard.slice(0, 5);
+    localStorage.setItem('leaderboard', JSON.stringify(leaderboard));
+    stats.games++;
+    stats.totalScore += score;
+    localStorage.setItem('flyStats', JSON.stringify(stats));
+
+    music.volume = 0.25;
+  }
+  bird.y = 350;
+  bird.velocity = 0;
+  pipes = [];
+  enemies = [];
+  score = 0;
+  gameOver = false;
+  showTitle = true;
+  blinkFrame = 0;
+  blinkVisible = true;
+  eyeBlinkFrame = 0;
+  eyeVisible = true;
+  lastTime = performance.now();
+}
+
+function update(deltaTime) {
+
+  music.play();
+  flySound.play();
+
+  const seconds = deltaTime / 1000;
+  if (gameOver || showTitle) return;
+  if (isFlying) bird.velocity += lift * seconds;
+  bird.velocity += gravity * seconds;
+  bird.velocity = Math.max(Math.min(bird.velocity, 0.4), -1.0);
+  bird.y += bird.velocity * deltaTime;
+
+  // Add tilt and lateral movement based on flying state
+  bird.tilt = isFlying ? -0.03 : 0.03;
+  bird.x += isFlying ? -0.03 * deltaTime : 0.03 * deltaTime;
+  bird.x = Math.max(bird.baseX, Math.min(bird.baseX + 10, bird.x));
+
+  if (bird.y + bird.height > canvas.height || bird.y < 0) gameOver = true;
+
+  if (++pipeTimer >= pipeInterval) {
+    pipeTimer = 0;
+    spawnPipe();
+  }
+
+  if (++enemyTimer >= enemyInterval) {
+    enemyTimer = 0;
+    spawnEnemy();
+  }
+
+  for (let i = pipes.length - 1; i >= 0; i--) {
+    const pipe = pipes[i];
+    pipe.x -= 0.6 * deltaTime;
+    if (
+      bird.x < pipe.x + pipeWidth &&
+      bird.x + bird.width > pipe.x &&
+      (bird.y < pipe.top || bird.y + bird.height > pipe.top + pipe.gap)
+    ) gameOver = true;
+
+    if (!pipe.passed && pipe.x + pipeWidth < bird.x) {
+      pipe.passed = true;
+      score++;
+    }
+    if (pipe.x + pipeWidth < 0) pipes.splice(i, 1);
+  }
+
+  for (let i = 0; i < enemies.length; i++) {
+    let enemy = enemies[i];
+    enemy.x += enemy.vx * deltaTime * 0.06;
+    enemy.y += enemy.vy * deltaTime * 0.06;
+
+    for (let j = i + 1; j < enemies.length; j++) {
+      let other = enemies[j];
+      let dx = other.x - enemy.x;
+      let dy = other.y - enemy.y;
+      let dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < (enemy.size + other.size) / 2) {
+        let midX = (enemy.x + other.x) / 2;
+        let midY = (enemy.y + other.y) / 2;
+        enemy.size += other.size * 0.5;
+        enemy.x = midX;
+        enemy.y = midY;
+        enemy.vx *= 0.25;
+        enemy.vy *= 0.25;
+        enemy.collisions++;
+        enemies.splice(j, 1);
+        j--;
+      }
+    }
+
+    if (enemy.x < 0 || enemy.x + enemy.size > canvas.width) enemy.vx *= -0.88;
+    if (enemy.y < 0 || enemy.y + enemy.size > canvas.height) enemy.vy *= -0.88;
+
+    if (
+      bird.x < enemy.x + enemy.size &&
+      bird.x + bird.width > enemy.x &&
+      bird.y < enemy.y + enemy.size &&
+      bird.y + bird.height > enemy.y
+    ) gameOver = true;
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (showTitle) {
+    ctx.fillStyle = "black";
+    ctx.font = "120px 'Rugged'";
+    ctx.textAlign = "center";
+    ctx.fillText("FLY", canvas.width / 2, canvas.height / 2);
+    ctx.font = "14px 'HomeVideoBold'";
+    ctx.fillText("Click or Tap to Start", canvas.width / 2, canvas.height / 2 + 40);
+    return;
+  }
+
+  if (!gameOver) {
+    blinkFrame++;
+    if (blinkFrame % 10 === 0) blinkVisible = !blinkVisible;
+    eyeBlinkFrame++;
+    if (eyeVisible && eyeBlinkFrame >= 180) { eyeVisible = false; eyeBlinkFrame = 0; }
+    else if (!eyeVisible && eyeBlinkFrame >= 25) { eyeVisible = true; eyeBlinkFrame = 0; }
+  }
+
+  // Save and rotate context for tilt
+  ctx.save();
+  ctx.translate(bird.x + bird.width / 2, bird.y + bird.height / 2);
+  ctx.rotate(bird.tilt);
+  ctx.fillStyle = "black";
+  ctx.fillRect(-bird.width / 2, -bird.height / 2, bird.width, bird.height);
+
+  if (blinkVisible) {
+    ctx.beginPath();
+    ctx.ellipse(-bird.width / 2 + bird.width * 0.2, -bird.height / 2 + bird.height * 0.2, 4, 2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = "white";
+    ctx.fill();
+  }
+  if (eyeVisible) {
+    ctx.beginPath();
+    ctx.arc(bird.width / 2 - 3, -bird.height / 2 + bird.height * 0.3, 2, 0, Math.PI * 2);
+    ctx.fillStyle = "red";
+    ctx.fill();
+  } else {
+    ctx.strokeStyle = "red";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(bird.width / 2 - 3.5, -bird.height / 2 + bird.height * 0.28);
+    ctx.lineTo(bird.width / 2 - 2.5, -bird.height / 2 + bird.height * 0.28);
+    ctx.moveTo(bird.width / 2 - 3.5, -bird.height / 2 + bird.height * 0.32);
+    ctx.lineTo(bird.width / 2 - 2.5, -bird.height / 2 + bird.height * 0.32);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Draw pipes
+  ctx.fillStyle = "grey";
+  pipes.forEach(pipe => {
+    ctx.fillRect(pipe.x, 0, pipeWidth, pipe.top);
+    ctx.fillRect(pipe.x, pipe.top + pipe.gap, pipeWidth, pipe.bottom);
+  });
+
+  // Draw enemies
+  ctx.fillStyle = "#7a7961";
+  enemies.forEach(enemy => {
+    ctx.fillRect(enemy.x, enemy.y, enemy.size, enemy.size);
+  });
+
+  ctx.font = "24px 'HomeVideo'";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#f5f5f5";
+  ctx.fillText(score, canvas.width / 2, canvas.height - 5);
+
+  if (gameOver) {
+    music.volume = 0.05;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+    ctx.fillRect(canvas.width / 2 - 150, canvas.height / 2 - 80, 300, 350);
+    ctx.fillStyle = "white";
+    ctx.font = "16px 'HomeVideoBold'";
+    ctx.fillText(`Games: ${stats.games} | Avg Score: ${Math.round(stats.totalScore / (stats.games || 1))}`, canvas.width / 2, canvas.height / 2 - 55);
+    ctx.font = "42px 'HomeVideo'";
+    ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2);
+    ctx.font = "20px 'HomeVideoBold'";
+    ctx.fillText("Top Scores:", canvas.width / 2, canvas.height / 2 + 40);
+    leaderboard.forEach((s, i) => {
+      ctx.fillText((i + 1) + ". " + s, canvas.width / 2, canvas.height / 2 + 70 + i * 30);
+    });
+    ctx.fillText("Tap to Restart", canvas.width / 2, canvas.height / 2 + 250);
+  }
+}
+
+let lastTime = performance.now();
+let accumulator = 0;
+const frameDuration = 1000 / 60;
+function gameLoop(now = performance.now()) {
+  const delta = now - lastTime;
+  lastTime = now;
+  accumulator += delta;
+
+  while (accumulator >= frameDuration) {
+    update(frameDuration);
+    accumulator -= frameDuration;
+  }
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
+</script>
+</body>
+</html>
